@@ -1,0 +1,6 @@
+@ServerPathesMinimalApi_HostAddress = http://localhost:5033
+
+GET {{ServerPathsMinimalApi_HostAddress}}/api/FileDiscovery/list
+Accept: application/json
+
+###
