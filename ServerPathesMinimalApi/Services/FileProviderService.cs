@@ -10,7 +10,8 @@ public class FileCacheBackgroundService(
     IHttpClientFactory httpClientFactory) : BackgroundService, IFileProviderBgService
 {
     private readonly FileServiceOptions _options = options.Value;
-    private volatile FrozenSet<string> _cachedFiles = FrozenSet<string>.Empty;
+    private volatile FrozenSet<string> _cachedFiles = [];
+    private static readonly JsonSerializerOptions _jsonOptions = new() { PropertyNameCaseInsensitive = true };
     public FrozenSet<string> GetCurrentFiles() => _cachedFiles;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -31,16 +32,12 @@ public class FileCacheBackgroundService(
         {
             logger.LogInformation("Запуск фонового обновления списка файлов...");
 
-            using var client = httpClientFactory.CreateClient();
-            client.DefaultRequestHeaders.Add("X-API-Key", _options.ExternalApiKey);
+            using var client = httpClientFactory.CreateClient("ScannerClient");
+            using var stream = await client.GetStreamAsync("/report_last", ct);
 
-            using var stream = await client.GetStreamAsync($"{_options.ScannerUrl}/report_last", ct);
-
-            JsonSerializerOptions jsonSerializerOptions = new() { PropertyNameCaseInsensitive = true };
-            JsonSerializerOptions options1 = jsonSerializerOptions;
             var items = JsonSerializer.DeserializeAsyncEnumerable<FileReportItem>(
                 stream,
-                options1,
+                _jsonOptions,
                 ct);
 
             var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

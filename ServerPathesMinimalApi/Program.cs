@@ -20,6 +20,12 @@ builder.Services.AddSingleton<FileCacheBackgroundService>();
 builder.Services.AddSingleton<IFileProviderBgService>(sp => sp.GetRequiredService<FileCacheBackgroundService>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<FileCacheBackgroundService>());
 builder.Services.AddSingleton<ILinksComparerService, LinksComparerService>();
+builder.Services.AddHttpClient("ScannerClient", (sp, client) =>
+{
+    var opts = sp.GetRequiredService<IOptions<FileServiceOptions>>().Value;
+    client.BaseAddress = new Uri(opts.ScannerUrl);
+    client.DefaultRequestHeaders.Add("X-API-Key", opts.ExternalApiKey);
+});
 
 var app = builder.Build();
 
