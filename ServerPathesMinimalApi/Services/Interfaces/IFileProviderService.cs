@@ -2,8 +2,8 @@
 
 namespace ServerPathsMinimalApi.Services.Interfaces
 {
-    public interface IFileProviderService
+    public interface IFileProviderBgService
     {
-        FrozenSet<string> FindedFiles { get; }
+        FrozenSet<string> GetCurrentFiles();
     }
 }

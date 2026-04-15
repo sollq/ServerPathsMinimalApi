@@ -2,66 +2,106 @@
 using ServerPathsMinimalApi.Models;
 using ServerPathsMinimalApi.Services.Interfaces;
 using System.Collections.Frozen;
+using System.Text.Json;
 
-namespace ServerPathsMinimalApi.Services;
-
-public class FileProviderService(ILogger<FileProviderService> logger, IOptions<FileServiceOptions> options, IHttpClientFactory httpClientFactory) : IFileProviderService
+public class FileCacheBackgroundService(
+    ILogger<FileCacheBackgroundService> logger,
+    IOptions<FileServiceOptions> options,
+    IHttpClientFactory httpClientFactory) : BackgroundService, IFileProviderBgService
 {
     private readonly FileServiceOptions _options = options.Value;
-    protected async Task<FrozenSet<string>?> GetAsync(CancellationToken stoppingToken)
+    private volatile FrozenSet<string> _cachedFiles = FrozenSet<string>.Empty;
+    public FrozenSet<string> GetCurrentFiles() => _cachedFiles;
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        try
+        await Task.Yield();
+
+        await RefreshCacheAsync(stoppingToken);
+        using var timer = new PeriodicTimer(TimeSpan.FromMinutes(_options.RefreshIntervalMinutes));
+        while (await timer.WaitForNextTickAsync(stoppingToken))
         {
-            return await GetScanAndProcess(stoppingToken);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Get files failed");
-            return [];
+            await RefreshCacheAsync(stoppingToken);
         }
     }
 
-    private async Task<FrozenSet<string>> GetScanAndProcess(CancellationToken ct)
+    private async Task RefreshCacheAsync(CancellationToken ct)
     {
-        using var client = httpClientFactory.CreateClient();
-        client.DefaultRequestHeaders.Add("X-API-Key", _options.ExternalApiKey);
-
-        var response = await client.GetAsync($"{_options.ScannerUrl}/report_last", ct);
-        response.EnsureSuccessStatusCode();
-
-        var items = await response.Content.ReadFromJsonAsync<List<FileReportItem>>(cancellationToken: ct);
-        if (items == null || items.Count == 0) return [];
-
-        var result = new HashSet<string>(items.Count, StringComparer.OrdinalIgnoreCase);
-        int rootLen = _options.PicsPath.Length;
-
-        foreach (var item in items)
+        try
         {
-            var pSpan = item.Path.AsSpan(rootLen).TrimStart('\\').TrimStart('/');
-            var nSpan = item.Name.AsSpan();
+            logger.LogInformation("Запуск фонового обновления списка файлов...");
 
-            bool hasPath = !pSpan.IsEmpty;
-            int totalLength = pSpan.Length + (hasPath ? 1 : 0) + nSpan.Length;
+            using var client = httpClientFactory.CreateClient();
+            client.DefaultRequestHeaders.Add("X-API-Key", _options.ExternalApiKey);
 
-            var finalStr = string.Create(totalLength, (item, rootLen, hasPath), (dest, state) =>
+            using var stream = await client.GetStreamAsync($"{_options.ScannerUrl}/report_last", ct);
+
+            JsonSerializerOptions jsonSerializerOptions = new() { PropertyNameCaseInsensitive = true };
+            JsonSerializerOptions options1 = jsonSerializerOptions;
+            var items = JsonSerializer.DeserializeAsyncEnumerable<FileReportItem>(
+                stream,
+                options1,
+                ct);
+
+            var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            await foreach (var item in items)
             {
-                var p = state.item.Path.AsSpan(state.rootLen).TrimStart('\\').TrimStart('/');
-                var n = state.item.Name.AsSpan();
+                if (item == null || string.IsNullOrEmpty(item.Path) || string.IsNullOrEmpty(item.Name))
+                    continue;
 
-                for (int i = 0; i < p.Length; i++)
-                    dest[i] = p[i] == '\\' ? '/' : p[i];
+                if (!item.Path.StartsWith(_options.PicsPath, StringComparison.OrdinalIgnoreCase))
+                    continue;
 
-                if (state.hasPath)
-                    dest[p.Length] = '/';
+                var relativePathSpan = item.Path.AsSpan(_options.PicsPath.Length).TrimStart('\\').TrimStart('/');
+                var nameSpan = item.Name.AsSpan();
 
-                int nameStart = state.hasPath ? p.Length + 1 : 0;
-                for (int i = 0; i < n.Length; i++)
-                    dest[nameStart + i] = n[i] == '\\' ? '/' : n[i];
-            });
+                int pathLen = relativePathSpan.Length;
+                int nameLen = nameSpan.Length;
 
-            result.Add(finalStr);
+                bool needsSeparator = pathLen > 0;
+                int totalLen = pathLen + (needsSeparator ? 1 : 0) + nameLen;
+
+                var normalizedPath = string.Create(totalLen,
+                    (item.Path, item.Name, Offset: _options.PicsPath.Length, NeedsSeparator: needsSeparator),
+                    (dest, state) =>
+                    {
+                        var pSpan = state.Path.AsSpan(state.Offset).TrimStart('\\').TrimStart('/');
+                        var nSpan = state.Name.AsSpan();
+
+                        for (int i = 0; i < pSpan.Length; i++)
+                        {
+                            dest[i] = pSpan[i] == '\\' ? '/' : pSpan[i];
+                        }
+
+                        int currentPos = pSpan.Length;
+
+                        if (state.NeedsSeparator)
+                        {
+                            dest[currentPos++] = '/';
+                        }
+
+                        for (int i = 0; i < nSpan.Length; i++)
+                        {
+                            dest[currentPos + i] = nSpan[i] == '\\' ? '/' : nSpan[i];
+                        }
+                    });
+
+                result.Add(normalizedPath);
+            }
+
+            if (result.Count == 0)
+            {
+                logger.LogWarning("Сканер вернул пустой список. Кеш не обновлен.");
+                return;
+            }
+
+            _cachedFiles = result.ToFrozenSet();
+            logger.LogInformation("Кеш файлов успешно обновлен. Элементов: {Count}", _cachedFiles.Count);
         }
-
-        return result.ToFrozenSet();
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Ошибка при фоновом обновлении кеша файлов. Используются старые данные.");
+        }
     }
 }

@@ -2,5 +2,5 @@
 
 public interface ILinksComparerService
 {
-    LinksComparisonResponse? GetInvalidLinks(LinksComparisonRequest request);
+    public LinksComparisonResponse? GetInvalidLinks(LinksComparisonRequest request);
 }
