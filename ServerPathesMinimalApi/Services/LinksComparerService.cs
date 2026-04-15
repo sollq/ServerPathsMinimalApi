@@ -8,7 +8,7 @@ public class LinksComparerService(ILogger<LinksComparerService> logger, IFilePro
     {
         try
         {
-            var serverLinks = service.CachedFiles;
+            var serverLinks = service.FindedFiles;
             var lookup = serverLinks.GetAlternateLookup<ReadOnlySpan<char>>();
             var baseLen = request.LinkBaseDirectory.Length;
             List<int> intOfferShops = new(request.LinksInBd.Count / 10);

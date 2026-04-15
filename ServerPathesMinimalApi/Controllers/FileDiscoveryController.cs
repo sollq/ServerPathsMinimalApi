@@ -20,6 +20,6 @@ public class FileDiscoveryController : ControllerBase
     public IActionResult GetFiles([FromHeader(Name = "x-api-key")] string apiKey)
     {
         if (apiKey != _expectedApiKey) return Unauthorized();
-        return Ok(_fileProvider.CachedFiles);
+        return Ok(_fileProvider.FindedFiles);
     }
 }

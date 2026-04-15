@@ -5,53 +5,63 @@ using System.Collections.Frozen;
 
 namespace ServerPathsMinimalApi.Services;
 
-public class FileProviderService(ILogger<FileProviderService> logger, IOptions<FileServiceOptions> options) : BackgroundService, IFileProviderService
+public class FileProviderService(ILogger<FileProviderService> logger, IOptions<FileServiceOptions> options, IHttpClientFactory httpClientFactory) : IFileProviderService
 {
     private readonly FileServiceOptions _options = options.Value;
-    public FrozenSet<string> CachedFiles { get; private set; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase).ToFrozenSet();
-
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    protected async Task<FrozenSet<string>?> GetAsync(CancellationToken stoppingToken)
     {
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            try
-            {
-                CachedFiles = await Task.Run(() => GetScanAndProcess(stoppingToken), stoppingToken);
-                logger.LogInformation($"Network scan completed. Cached {CachedFiles.Count} files.", CachedFiles.Count);
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Network Scan failed");
-            }
-            await Task.Delay(TimeSpan.FromMinutes(_options.RefreshIntervalMinutes), stoppingToken);
+            return await GetScanAndProcess(stoppingToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Get files failed");
+            return [];
         }
     }
 
-    private FrozenSet<string> GetScanAndProcess(CancellationToken ct)
+    private async Task<FrozenSet<string>> GetScanAndProcess(CancellationToken ct)
     {
-        var result = new HashSet<string>(150_000, StringComparer.OrdinalIgnoreCase);
-        var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true };
+        using var client = httpClientFactory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-API-Key", _options.ExternalApiKey);
 
-        string networkPath = _options.PicsPath;
-        int prefixLength = networkPath.Length;
+        var response = await client.GetAsync($"{_options.ScannerUrl}/report_last", ct);
+        response.EnsureSuccessStatusCode();
 
-        foreach (var file in Directory.EnumerateFiles(networkPath, "*.jpg", options))
+        var items = await response.Content.ReadFromJsonAsync<List<FileReportItem>>(cancellationToken: ct);
+        if (items == null || items.Count == 0) return [];
+
+        var result = new HashSet<string>(items.Count, StringComparer.OrdinalIgnoreCase);
+        int rootLen = _options.PicsPath.Length;
+
+        foreach (var item in items)
         {
-            if (file.Length <= prefixLength) continue;
+            var pSpan = item.Path.AsSpan(rootLen).TrimStart('\\').TrimStart('/');
+            var nSpan = item.Name.AsSpan();
 
-            ct.ThrowIfCancellationRequested();
+            bool hasPath = !pSpan.IsEmpty;
+            int totalLength = pSpan.Length + (hasPath ? 1 : 0) + nSpan.Length;
 
-            var rel = file.AsSpan(prefixLength).TrimStart('\\').TrimStart('/');
-
-            result.Add(string.Create(rel.Length, rel, (dest, src) =>
+            var finalStr = string.Create(totalLength, (item, rootLen, hasPath), (dest, state) =>
             {
-                for (int i = 0; i < src.Length; i++)
-                {
-                    dest[i] = src[i] == '\\' ? '/' : src[i];
-                }
-            }));
+                var p = state.item.Path.AsSpan(state.rootLen).TrimStart('\\').TrimStart('/');
+                var n = state.item.Name.AsSpan();
+
+                for (int i = 0; i < p.Length; i++)
+                    dest[i] = p[i] == '\\' ? '/' : p[i];
+
+                if (state.hasPath)
+                    dest[p.Length] = '/';
+
+                int nameStart = state.hasPath ? p.Length + 1 : 0;
+                for (int i = 0; i < n.Length; i++)
+                    dest[nameStart + i] = n[i] == '\\' ? '/' : n[i];
+            });
+
+            result.Add(finalStr);
         }
-        
+
         return result.ToFrozenSet();
     }
 }
