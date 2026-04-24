@@ -2,5 +2,5 @@
 
 public interface ILinksComparerService
 {
-    public LinksComparisonResponse? GetInvalidLinks(LinksComparisonRequest request);
+    public Task<List<LinkSyncResult>> GetInvalidLinks(LinksComparisonRequest request, CancellationToken ct = default);
 }

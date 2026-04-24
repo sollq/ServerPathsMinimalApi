@@ -1,11 +1,15 @@
-﻿namespace ServerPathsMinimalApi.Models
+﻿using System.ComponentModel.DataAnnotations;
+
+namespace ServerPathsMinimalApi.Models
 {
     public record FileServiceOptions
     {
         public string ApiKey { get; init; } = string.Empty;
         public string ExternalApiKey { get; init; } = string.Empty;
         public string PicsPath { get; init; } = string.Empty; 
-        public string ScannerUrl { get; init; } = string.Empty;
-        public double RefreshIntervalMinutes { get; internal set; }
+        public string ScannerUrl { get; init; } = string.Empty; 
+
+        [Range(1, int.MaxValue, ErrorMessage = "Интервал обновления должен быть больше 0.")]
+        public int RefreshIntervalMinutes { get; set; }
     }
 }
