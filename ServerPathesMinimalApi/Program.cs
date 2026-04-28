@@ -37,18 +37,21 @@ app.MapPost("/api/LinksComparer/compare-list", async (
     [FromHeader(Name = "x-api-key")] string? apiKey,
     [FromBody] LinksComparisonRequest request,
     ILinksComparerService linksComparer,
-    IOptions<FileServiceOptions> options) => 
+    IOptions<FileServiceOptions> options,
+    CancellationToken ct) =>
 {
     if (string.IsNullOrEmpty(apiKey) || apiKey != options.Value.ApiKey)
         return Results.Unauthorized();
 
-    if (request == null || request.LinksInBd == null) return Results.BadRequest("Body is missing or invalid JSON");
+    if (request == null || request.LinksInBd == null)
+        return Results.BadRequest("Body is missing or invalid JSON");
 
-    var response = new LinksComparisonResponse(await linksComparer.GetInvalidLinks(request));
 
-    return response is not null
-        ? Results.Ok(response)
-        : Results.StatusCode(500);
+    var invalidLinks = await linksComparer.GetInvalidLinks(request, ct);
+
+    var response = new LinksComparisonResponse(invalidLinks);
+
+    return Results.Ok(response);
 });
 
 app.Run();
